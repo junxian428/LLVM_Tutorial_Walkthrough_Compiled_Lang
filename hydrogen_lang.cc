@@ -1,6 +1,8 @@
 #include<string>
 #include<iostream>
 #include<vector>
+#include <map>
+#include <memory>
 
 using namespace std;
 //https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl01.html
@@ -248,6 +250,7 @@ public:
 
 // Parser Basic Chapter 3
 // Recursive function parser
+static std::map<char, int> BinopPrecedence;
 
 
 // Current Token
@@ -276,6 +279,7 @@ Let says
 
 
 */
+static std::unique_ptr<ExprAST> ParseExpression();
 
 // For Error Report
 std::unique_ptr<ExprAST> LogError(const char *Str){
@@ -386,3 +390,259 @@ static std::unique_ptr<ExprAST> ParsePrimary() {
 }
 
 // Chapter 7
+//Shunting Yant Algorithmn
+
+//2.5. Binary Expression Parsing
+
+/// BinopPrecedence - This holds the precedence for each binary operator that is
+/// defined.
+static int GetTokPrecedencce(){
+    switch(CurTok){
+        case '<':
+        case '>':
+            return 10;
+
+        case '+':
+        case '-':
+            return 20;
+
+        case '*':
+        case '/':
+            return 40;
+
+        default:
+            return -1;
+    }
+}
+// 2 + 3  + 4
+// 
+//  2          +        2          +     4        
+// Primary   CurTok   New Primary
+// Tok Prcendence 20 
+// Initiate start with 0
+// https://www.bilibili.com/video/BV1eL4y1t7z5?p=7
+// Multiplication
+//   2 + 2 or  2 + 4 grouped together
+
+static std::unique_ptr<ExprAST> ParseExpression(){
+
+    auto LHS = ParsePrimary();
+    // If cannot pass
+    // return nullptr
+    if(LHS){
+        // if bigger than 0 it wii move
+        return ParseBinOpRHS(0, std::move(LHS));
+    }
+
+    return nullptr;
+}
+
+static std::unique_ptr<ExprAST> ParseBinOpRHS(
+    // Preceduce #
+    int ExprPrec,
+    std::unique_ptr<ExprAST> LHS)
+{
+    while(true){
+        // COmpare with ExprPrec
+        int TokPrec = GetTokPrecedencce();
+        // ? + 2
+        // 90 + 2
+        // + sign only 20
+        // 90 will be LHS to be selected
+        if(TokPrec < ExprPrec){
+            return LHS;
+        } else{
+            int BinOp = CurTok;
+            getNextToken(); // eat binop
+            auto RHS = ParsePrimary();
+            // No RHS return null pointer
+            // 1 + 2 * 3
+            // 
+            // LHS RHS 
+            if(RHS){
+                int NextPrec = GetTokPrecedencce();
+                // Token < NextPrec
+                // What if  1 + 2 * 3
+                // TokenPrec = 20 (plus sign)
+                // NextPrec = 40 (mutiple)
+
+                // Then this below if-statement will run
+                // 2 * 3 will become new right hand size
+                if(TokPrec < NextPrec){
+                    // Merge LHS/RHS.
+                    RHS = ParseBinOpRHS(TokPrec+1, std::move(RHS));
+                    if(!RHS){
+                        return nullptr;
+                    }
+                }
+                // Group 
+                LHS = std::make_unique<BinaryExprAST>(BinOp, std::move(LHS),std::move(RHS));
+
+            } else{
+                return nullptr;
+            }
+        }
+    }
+
+}
+
+//  Testing?
+// 1 + 2 + 3
+// Chapter 8 
+// Compilation Trouble
+
+// Shunting Yard Algorithm
+//https://en.wikipedia.org/wiki/Shunting_yard_algorithm#:~:text=In%20computer%20science%2C%20the%20shunting,abstract%20syntax%20tree%20(AST).
+
+// Parsing the rest (Chapter 2)
+// Hope this could be finishing chapter 2
+// havent testing until now since last time
+
+
+// Parse function signature
+// function name(parameter list, parameter list)
+//  ID            
+// foobar(n,m)
+
+static std::unique_ptr<PrototypeAST> ParsePrototype(){
+    if(CurTok != tok_identifier){
+        return LogErrorP("Expected function name in prototype");
+    }
+
+    std::string FnName = IdentifierStr;
+    getNextToken(); // Eat identifier
+
+    // Open para ( 
+    // if not ( show error
+    if (CurTok != '(')
+        return LogErrorP("Expected '(' in prototype");
+
+    // Read the list of argument names.
+    // why not unique pointer here?????????
+    std::vector<std::string> ArgNames;
+    // it is not common delimiter
+    // foobar()
+    while(getNextToken() == tok_identifier){
+        ArgNames.push_back(IdentifierStr);
+    }
+
+    if (CurTok != ')'){
+        return LogErrorP("Expected ')' in prototype");
+    }
+
+
+    getNextToken();
+
+    return std::make_unique<PrototypeAST>(FnName, std::move(ArgNames));
+
+
+}
+
+/// definition ::= 'def' prototype expression
+static std::unique_ptr<FunctionAST> ParseDefinition() {
+  getNextToken();  // eat def.
+  auto Proto = ParsePrototype();
+  if (!Proto) {
+    return nullptr;
+  }
+ auto E = ParseExpression();
+  if (E){
+    return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
+  } else{
+    return nullptr;
+  }
+}
+
+
+//extern foobar(n,m,m)
+
+// ParserExtern
+/// external ::= 'extern' prototype
+static std::unique_ptr<PrototypeAST> ParseExtern() {
+  getNextToken();  // eat extern.
+  return ParsePrototype();
+}
+
+// Last part
+
+/// toplevelexpr ::= expression
+static std::unique_ptr<FunctionAST> ParseTopLevelExpr() {
+  if (auto E = ParseExpression()) {
+    // Make an anonymous proto.
+    auto Proto = std::make_unique<PrototypeAST>("", std::vector<std::string>());
+    return std::make_unique<FunctionAST>(std::move(Proto), std::move(E));
+  }
+  return nullptr;
+}
+//===----------------------------------------------------------------------===//
+// Top-Level parsing
+//===----------------------------------------------------------------------===//
+
+static void HandleDefinition() {
+  if (ParseDefinition()) {
+    fprintf(stderr, "Parsed a function definition.\n");
+  } else {
+    // Skip token for error recovery.
+    getNextToken();
+  }
+}
+
+static void HandleExtern() {
+  if (ParseExtern()) {
+    fprintf(stderr, "Parsed an extern\n");
+  } else {
+    // Skip token for error recovery.
+    getNextToken();
+  }
+}
+
+static void HandleTopLevelExpression() {
+  // Evaluate a top-level expression into an anonymous function.
+  if (ParseTopLevelExpr()) {
+    fprintf(stderr, "Parsed a top-level expr\n");
+  } else {
+    // Skip token for error recovery.
+    getNextToken();
+  }
+}
+
+/// top ::= definition | external | expression | ';'
+static void MainLoop() {
+  while (1) {
+    fprintf(stderr, "ready> ");
+    switch (CurTok) {
+    case tok_eof:
+      return;
+    case ';': // ignore top-level semicolons.
+      getNextToken();
+      break;
+    case tok_def:
+      HandleDefinition();
+      break;
+    case tok_extern:
+      HandleExtern();
+      break;
+    default:
+      HandleTopLevelExpression();
+      break;
+    }
+  }
+}
+
+int main() {
+  // Install standard binary operators.
+  // 1 is lowest precedence.
+  BinopPrecedence['<'] = 10;
+  BinopPrecedence['+'] = 20;
+  BinopPrecedence['-'] = 20;
+  BinopPrecedence['*'] = 40; // highest.
+
+  // Prime the first token.
+  fprintf(stderr, "ready> ");
+  getNextToken();
+
+  // Run the main "interpreter loop" now.
+  MainLoop();
+
+  return 0;
+}
